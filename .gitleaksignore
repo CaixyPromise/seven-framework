@@ -1,0 +1,18 @@
+# Reviewed false positives: Go field names, deterministic test fixtures, and UI chart labels.
+seven-framework-server/internal/app/external_login/application/provider_admin_service.go:generic-api-key:167
+seven-framework-server/internal/app/external_login/application/token_vault_service.go:generic-api-key:237
+seven-framework-server/internal/app/notification/application/inbox_expiry_test.go:generic-api-key:19
+seven-framework-server/internal/app/notification/application/external_test.go:generic-api-key:419
+seven-framework-server/internal/app/notification/application/service.go:generic-api-key:430
+seven-framework-server/internal/app/notification/application/inbox_test.go:generic-api-key:185
+seven-framework-server/internal/bootstrap/app_test.go:generic-api-key:563
+seven-framework-server/internal/bootstrap/app_test.go:generic-api-key:565
+seven-framework-server/internal/infrastructure/datasource/governance/b2_rename_integration_test.go:generic-api-key:381
+seven-framework-server/internal/app/system/config/application/service_test.go:generic-api-key:484
+seven-framework-server/internal/infrastructure/security/crypto/envelope/envelope_test.go:generic-api-key:79
+seven-framework-server/internal/infrastructure/datasource/governance/b3_rename_integration_test.go:generic-api-key:237
+seven-framework-server/internal/shared/config/config_test.go:generic-api-key:837
+seven-framework-server/internal/shared/config/config_test.go:generic-api-key:839
+seven-framework-server/internal/shared/config/config_test.go:generic-api-key:1064
+seven-framework-server/internal/shared/config/config_test.go:generic-api-key:1066
+seven-framework-web/src/app/system/observability/components/tabs/TrafficTab.tsx:generic-api-key:240

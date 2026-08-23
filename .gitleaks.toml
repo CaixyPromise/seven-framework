@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Observability chart field name compiled into the public Web bundle"
+regexes = ['''p95LatencyMs''']
+
+[[allowlists]]
+description = "Syft-generated SPDX checksums are not credentials"
+paths = ['''(^|/)sbom\.spdx\.json$''']
