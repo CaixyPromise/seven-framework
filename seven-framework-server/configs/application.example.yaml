@@ -1,0 +1,64 @@
+seven:
+  name: seven-framework-server
+  env: dev
+
+server:
+  host: 127.0.0.1
+  port: 9277
+  contextPath: /api
+
+logging:
+  level: info
+  format: json
+  request:
+    enabled: true
+    includeQuery: false
+  file:
+    enabled: false
+
+datasource:
+  driver: mysql
+  bootstrap:
+    enabled: false
+    mode: manual
+    versionTable: goose_db_version
+    changeOwner: goose
+    allowLegacySync: false
+  mysql:
+    enabled: false
+    dsn: ""
+  postgres:
+    enabled: false
+    dsn: ""
+
+cache:
+  enabled: false
+  redis:
+    enabled: false
+
+rabbitmq:
+  enabled: false
+  url: ""
+
+microservice:
+  enabled: false
+
+platform:
+  mode: local
+
+docker:
+  enabled: false
+
+setup:
+  enabled: false
+
+login:
+  enabled: false
+
+storage:
+  location: uploads
+  staticPath: /static
+
+security:
+  originPatterns:
+    - http://127.0.0.1:5177
