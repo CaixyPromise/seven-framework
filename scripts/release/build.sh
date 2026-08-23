@@ -9,6 +9,10 @@ if [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
 fi
 goos="${GOOS:-$(go env GOOS)}"
 goarch="${GOARCH:-$(go env GOARCH)}"
+# GOOS/GOARCH describe the release target, but any Go-based build tools must
+# still be installed for the host runner. The service build receives the
+# target values explicitly below.
+unset GOOS GOARCH
 commit="${COMMIT:-$(git -C "$root_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 build_date="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 module_path="github.com/CaixyPromise/seven-framework/seven-framework-server"
