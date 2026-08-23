@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
+	"strings"
 	"time"
 
 	bootstrapbuild "github.com/CaixyPromise/seven-framework/seven-framework-server/internal/bootstrap/build"
@@ -46,10 +48,29 @@ type App struct {
 	jobsStart  func(context.Context) error
 }
 
+// Options controls the filesystem resources used while constructing the server.
+type Options struct {
+	ConfigDir      string
+	MigrationsRoot string
+}
+
+// New constructs the server with the historical configuration-directory API.
 func New(configDir string) (*App, error) {
+	return NewWithOptions(Options{ConfigDir: configDir})
+}
+
+// NewWithOptions constructs the server using explicit release filesystem paths.
+func NewWithOptions(options Options) (*App, error) {
+	configDir := strings.TrimSpace(options.ConfigDir)
+	if configDir == "" {
+		return nil, errors.New("configuration directory is required")
+	}
 	cfg, err := config.Load(configDir)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+	if migrationsRoot := strings.TrimSpace(options.MigrationsRoot); migrationsRoot != "" {
+		cfg.Datasource.Bootstrap.MigrationsDir = filepath.Join(migrationsRoot, cfg.Datasource.Driver)
 	}
 
 	log, err := logger.New(cfg.Logging, cfg.Profile)
