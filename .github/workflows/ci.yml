@@ -25,6 +25,8 @@ jobs:
         run: make -C seven-framework-server test
       - name: Check DDD import boundaries
         run: scripts/check-ddd.sh
+      - name: Check database architecture contracts
+        run: scripts/check-database-contracts.sh
       - name: Race test critical boundaries
         working-directory: seven-framework-server
         run: >-

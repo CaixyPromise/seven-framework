@@ -27,6 +27,7 @@ var (
 	dg0RenameTablePattern           = regexp.MustCompile(`(?im)(?:\bRENAME\s+TABLE|,)\s*(?:(?:["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?)\.)?["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?\s+TO\s+(?:(?:["\x60]?public["\x60]?)\.)?["\x60]?([A-Za-z_][A-Za-z0-9_]*)["\x60]?`)
 	dg0ForeignKeyDeclarationPattern = regexp.MustCompile(`(?im)\bFOREIGN\s+KEY\s*\(`)
 	dg0ForeignKeyReferencePattern   = regexp.MustCompile(`(?im)\bREFERENCES\s+(?:(?:["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?)\.)?["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?\s*\(`)
+	dg0TextIDColumnPattern          = regexp.MustCompile(`(?im)["\x60]?([A-Za-z_][A-Za-z0-9_]*(?:_id|id)|id)["\x60]?\s+(?:TINYTEXT|MEDIUMTEXT|LONGTEXT|TEXT)\b`)
 	dg0ColumnRenamePattern          = regexp.MustCompile(`(?im)\b(?:(?:ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:(?:["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?)\.)?["\x60]?[A-Za-z_][A-Za-z0-9_]*["\x60]?\s+)?RENAME\s+COLUMN\b)`)
 	dg0BlockCommentPattern          = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	dg0LineCommentPattern           = regexp.MustCompile(`(?m)--[^\r\n]*`)
@@ -68,6 +69,25 @@ func TestDG0FutureMigrationsUseLowerSnakeTablesAndRejectForeignKeys(t *testing.T
 	}
 	if len(violations) > 0 {
 		t.Fatalf("future migrations violate the DG0 table/foreign-key contract:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func TestDG0MigrationSourcesRejectUnboundedTextIDs(t *testing.T) {
+	root := governanceRepositoryRoot(t)
+	var violations []string
+	for _, migration := range dg0MigrationFiles(t, root) {
+		content, err := os.ReadFile(migration)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", migration, err)
+		}
+		for _, column := range dg0TextIDColumns(dg0StripSQLComments(string(content))) {
+			relative, _ := filepath.Rel(root, migration)
+			violations = append(violations, fmt.Sprintf("%s declares ID column %q as unbounded text; internal IDs must use Snowflake BIGINT and external/protocol IDs must use bounded VARCHAR", filepath.ToSlash(relative), column))
+		}
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Fatalf("migration sources violate the ID storage contract:\n%s", strings.Join(violations, "\n"))
 	}
 }
 
@@ -203,6 +223,9 @@ func dg0FutureMigrationViolations(root string) ([]string, error) {
 		if dg0NewForeignKeyDeclaration(stripped) {
 			violations = append(violations, fmt.Sprintf("%s declares FOREIGN KEY or REFERENCES; relationship integrity must be owned by application logic", filepath.ToSlash(relative)))
 		}
+		for _, column := range dg0TextIDColumns(stripped) {
+			violations = append(violations, fmt.Sprintf("%s declares ID column %q as unbounded text; use Snowflake BIGINT or bounded VARCHAR", filepath.ToSlash(relative), column))
+		}
 		if dg0ColumnRenamePattern.MatchString(stripped) {
 			violations = append(violations, fmt.Sprintf("%s renames a column; DG0 preserves existing column names while table migration is planned", filepath.ToSlash(relative)))
 		}
@@ -303,6 +326,21 @@ func dg0StripSQLComments(sqlText string) string {
 
 func dg0NewForeignKeyDeclaration(sqlText string) bool {
 	return dg0ForeignKeyDeclarationPattern.MatchString(sqlText) || dg0ForeignKeyReferencePattern.MatchString(sqlText)
+}
+
+func dg0TextIDColumns(sqlText string) []string {
+	seen := make(map[string]struct{})
+	for _, match := range dg0TextIDColumnPattern.FindAllStringSubmatch(sqlText, -1) {
+		if len(match) > 1 {
+			seen[match[1]] = struct{}{}
+		}
+	}
+	columns := make([]string, 0, len(seen))
+	for column := range seen {
+		columns = append(columns, column)
+	}
+	sort.Strings(columns)
+	return columns
 }
 
 func dg0RegisteredTables(root string) (map[string]struct{}, error) {
@@ -624,6 +662,18 @@ RENAME TABLE sys_order_archive TO sys_order_history, sys_order_history TO sys_or
 	}
 	if !dg0ColumnRenamePattern.MatchString(`RENAME COLUMN owner_id TO purchaser_id`) {
 		t.Fatal("standalone RENAME COLUMN was not detected")
+	}
+	textIDs := dg0TextIDColumns(dg0StripSQLComments(`
+CREATE TABLE sys_example (
+  id TEXT NOT NULL,
+  externalTargetId VARCHAR(191) NOT NULL,
+  body TEXT,
+  owner_id MEDIUMTEXT
+);
+-- ignoredId TEXT
+`))
+	if strings.Join(textIDs, ",") != "id,owner_id" {
+		t.Fatalf("text ID columns=%v want=[id owner_id]", textIDs)
 	}
 }
 

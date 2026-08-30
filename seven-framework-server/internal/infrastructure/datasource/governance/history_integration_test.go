@@ -112,6 +112,7 @@ func TestDG1MigrationHistory(t *testing.T) {
 		}
 		assertLatestHistoryForwardOnlyDownRejected(t, ctx, provider.DB(), migrationsDir)
 		assertRetainedCamelCaseRoundTrip(t, ctx, provider.DB(), plan.Dialect)
+		assertFinalDatabaseContracts(t, ctx, provider.DB(), plan.Dialect)
 		return
 	}
 	if mode == "upgrade" {
@@ -139,6 +140,7 @@ func TestDG1MigrationHistory(t *testing.T) {
 		assertUpgradeFixturePreserved(t, ctx, provider.DB(), plan.Dialect)
 	}
 	assertRetainedCamelCaseRoundTrip(t, ctx, provider.DB(), plan.Dialect)
+	assertFinalDatabaseContracts(t, ctx, provider.DB(), plan.Dialect)
 }
 
 func TestDG3ContractMigration(t *testing.T) {
@@ -389,6 +391,52 @@ VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM sys_config_group WHERE id=?`, id); err != nil {
 		t.Fatalf("delete MySQL retained camelCase row: %v", err)
+	}
+}
+
+func assertFinalDatabaseContracts(t *testing.T, ctx context.Context, db queryRower, dialect string) {
+	t.Helper()
+	var foreignKeys int
+	var textIDs int
+	var err error
+	switch normalizeDialect(dialect) {
+	case "mysql":
+		err = db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.referential_constraints
+WHERE constraint_schema = DATABASE()`).Scan(&foreignKeys)
+		if err == nil {
+			err = db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND LOWER(data_type) IN ('text', 'tinytext', 'mediumtext', 'longtext')
+  AND (LOWER(column_name) = 'id' OR LOWER(column_name) LIKE '%id')`).Scan(&textIDs)
+		}
+	case "postgres":
+		err = db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.table_constraints
+WHERE table_schema = 'public' AND constraint_type = 'FOREIGN KEY'`).Scan(&foreignKeys)
+		if err == nil {
+			err = db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND data_type = 'text'
+  AND (LOWER(column_name) = 'id' OR LOWER(column_name) LIKE '%id')`).Scan(&textIDs)
+		}
+	default:
+		t.Fatalf("unsupported database dialect %q", dialect)
+	}
+	if err != nil {
+		t.Fatalf("inspect final %s database contracts: %v", dialect, err)
+	}
+	if foreignKeys != 0 {
+		t.Fatalf("final %s schema contains %d database foreign keys; relationships must be enforced in application logic", dialect, foreignKeys)
+	}
+	if textIDs != 0 {
+		t.Fatalf("final %s schema contains %d unbounded text ID columns; internal IDs must use Snowflake BIGINT and external IDs bounded VARCHAR", dialect, textIDs)
 	}
 }
 
