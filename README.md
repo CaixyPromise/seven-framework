@@ -26,14 +26,21 @@ The Web project is private package metadata and is not published to npm. Officia
 
 ## Source development
 
-Create a local configuration without committing it:
+Create a complete local configuration without committing it. The command
+generates owner-only local keys, enables setup/login/SSO and Redis, and never
+overwrites an existing `.local` configuration:
 
 ```bash
-cp seven-framework-server/configs/application.example.yaml \
-  seven-framework-server/configs/application.yaml
+scripts/dev/init-local.sh \
+  --mysql-dsn 'user:password@tcp(127.0.0.1:3306)/seven_framework?parseTime=true'
 ```
 
-Set sensitive values through environment variables. Viper maps configuration keys to uppercase underscore names; for example:
+PostgreSQL is also supported through `--postgres-dsn`. Pass
+`--rabbitmq-url` only when local notification/outbox consumption is required.
+The public example intentionally remains safe-off.
+
+For manually managed configuration, set sensitive values through environment
+variables. Viper maps configuration keys to uppercase underscore names; for example:
 
 ```bash
 export DATASOURCE_MYSQL_ENABLED=true
@@ -43,7 +50,7 @@ export DATASOURCE_MYSQL_DSN='user:password@tcp(127.0.0.1:3306)/seven_framework?p
 Start the API and Web development servers:
 
 ```bash
-make -C seven-framework-server run
+make -C seven-framework-server run-local
 pnpm --dir seven-framework-web install --frozen-lockfile
 pnpm --dir seven-framework-web dev
 ```

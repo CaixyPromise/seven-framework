@@ -24,7 +24,7 @@ RELEASE_LDFLAGS := -s -w \
 	-X '$(MODULE_PATH)/internal/shared/buildinfo.Commit=$(COMMIT)' \
 	-X '$(MODULE_PATH)/internal/shared/buildinfo.BuildDate=$(BUILD_DATE)'
 
-.PHONY: help tidy fmt fmt-check vet test test-race build build-release run migrate-up migrate-down migrate-status migrate-version migrate-create clean
+.PHONY: help tidy fmt fmt-check vet test test-race build build-release run run-local migrate-up migrate-down migrate-status migrate-version migrate-create clean
 
 help:
 	@echo "seven-framework-server targets"
@@ -34,6 +34,7 @@ help:
 	@echo "  make test-race      Run all tests with the race detector"
 	@echo "  make build-release  Build the public server binary"
 	@echo "  make run            Start the service from the source tree"
+	@echo "  make run-local      Start with the ignored .local development config"
 	@echo "  make migrate-up     Apply migrations"
 
 tidy:
@@ -65,6 +66,9 @@ build-release:
 
 run:
 	cd "$(ROOT_DIR)" && $(GO) run $(CMD_PATH) serve --home "$(ROOT_DIR)" --config-dir "$(CONFIG_DIR)" --migrations-dir "$(MIGRATIONS_DIR)"
+
+run-local:
+	cd "$(ROOT_DIR)" && $(GO) run $(CMD_PATH) serve --home "$(ROOT_DIR)" --config-dir "$(ROOT_DIR)../.local/configs" --migrations-dir "$(MIGRATIONS_DIR)"
 
 migrate-up:
 	cd "$(ROOT_DIR)" && $(GO) run $(CMD_PATH) migrate --home "$(ROOT_DIR)" --config-dir "$(CONFIG_DIR)" --migrations-dir "$(MIGRATIONS_DIR)" up

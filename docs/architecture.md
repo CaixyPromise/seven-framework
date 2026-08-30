@@ -24,6 +24,22 @@ The test suite contains import-boundary checks. A directory rename or provider i
 
 The bootstrap layer assembles modules and adapters. Shared infrastructure provides database access, caching, RabbitMQ, observability, security primitives, and HTTP protocol support. Optional infrastructure is activated by configuration; disabled features must not silently become partially active.
 
+## Database identity and relationship contract
+
+Persisted internal entity IDs use signed `BIGINT` columns populated by the
+shared Snowflake generator. External and protocol-owned identifiers may remain
+strings, but their database columns must use a reviewed bounded `VARCHAR`;
+identifier-shaped columns may never use `TEXT` or another unbounded text type.
+API and Web boundaries preserve Snowflake values as decimal strings so
+JavaScript cannot lose integer precision.
+
+Database foreign keys are prohibited. Relationship ownership, existence
+checks, atomic reference updates, and orphan cleanup belong to the application
+transaction and maintenance workflows. CI scans every migration for unbounded
+text IDs and scans all future migrations for new `FOREIGN KEY` or `REFERENCES`
+declarations. MySQL and PostgreSQL clean-migration acceptance also inspect the
+resulting schema and require zero text IDs and zero foreign keys.
+
 ## Web application
 
 `seven-framework-web` is a React, TypeScript, Vite, Ant Design, and Pro Components application. It consumes same-origin `/api` routes in production. Runtime branding and feature availability come from API contracts rather than hard-coded private deployment values.

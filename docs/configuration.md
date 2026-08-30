@@ -34,3 +34,16 @@ Use environment variables or a deployment secret manager for passwords, DSNs, cr
 ## Safe defaults
 
 The public example binds to loopback, disables datasource, cache, RabbitMQ, Docker, setup, and login integrations, and does not contain credentials. Enable only the capabilities whose dependencies and security keys have been configured. Production security validation remains active and can reject incomplete or unsafe values.
+
+## Local first-run configuration
+
+Use `scripts/dev/init-local.sh` with exactly one MySQL or PostgreSQL DSN. It
+creates `.local/configs/application.yaml`, a local master key, and an RSA
+signing key pair with mode `0600`; `.local/` is ignored by Git. The generated
+development configuration enables migrations, Redis, setup, login, and SSO.
+RabbitMQ remains disabled unless `--rabbitmq-url` is supplied.
+
+The initializer refuses to overwrite an existing configuration and never
+prints secrets. Start it with `make -C seven-framework-server run-local`, then
+create the first owner through `/setup`. These development defaults are not a
+production deployment template.
