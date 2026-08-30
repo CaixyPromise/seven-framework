@@ -99,6 +99,39 @@ func TestBootstrapEmptySchemaRunsBaselineThenUpdate(t *testing.T) {
 	}
 }
 
+func TestBootstrapPostgresEmptySchemaRunsCleanBaselineThenUpdate(t *testing.T) {
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	runner := &fakeRunner{upRet: 20260810110000}
+	service := NewServiceWithRunner(zap.NewNop(), runner)
+	service.inspector = &fakeInspector{inspection: Inspection{State: SchemaStateEmpty, VersionTable: "goose_db_version"}}
+	result, err := service.Bootstrap(context.Background(), &fakeProvider{
+		driver:     "postgres",
+		dialect:    "postgres",
+		db:         db,
+		configured: true,
+	}, config.DatasourceBootstrapConfig{
+		Enabled:          true,
+		Mode:             config.BootstrapModeStartup,
+		MigrationsDir:    "migrations/postgres",
+		CleanBaselineDir: "migrations/postgres-baseline",
+		VersionTable:     "goose_db_version",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap PostgreSQL empty schema: %v", err)
+	}
+	if !result.BaselineApplied || !result.UpdateApplied || result.FinalVersion != 20260810110000 {
+		t.Fatalf("unexpected PostgreSQL bootstrap result: %+v", result)
+	}
+	if runner.upCalls != 2 || runner.upToCalls != 0 {
+		t.Fatalf("PostgreSQL bootstrap must run clean baseline and incremental history exactly once: %+v", runner)
+	}
+}
+
 func TestBootstrapManagedSchemaRunsUpdateOnly(t *testing.T) {
 	db, _, err := sqlmock.New()
 	if err != nil {

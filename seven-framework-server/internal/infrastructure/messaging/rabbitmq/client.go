@@ -38,7 +38,6 @@ type Client struct {
 	enabled bool
 	mu      sync.RWMutex
 	conn    *amqp.Connection
-	channel *amqp.Channel
 }
 
 type QueueOptions struct {
@@ -154,7 +153,7 @@ func (c *Client) Enabled() bool {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.channel != nil
+	return c.conn != nil && !c.conn.IsClosed()
 }
 
 func (c *Client) Close() error {
@@ -163,9 +162,8 @@ func (c *Client) Close() error {
 	}
 	c.mu.Lock()
 	conn := c.conn
-	// Closing the connection closes the topology/consumer channel too. Clear
-	// both snapshots before its bounded AMQP round trip.
-	c.channel = nil
+	// Closing the connection closes all dedicated child channels. Clear the
+	// connection snapshot before its bounded AMQP round trip.
 	c.conn = nil
 	c.mu.Unlock()
 	if conn == nil {
@@ -194,10 +192,18 @@ func (c *Client) DeclareDirectExchange(name string) error {
 }
 
 func (c *Client) DeclareExchange(opts ExchangeOptions) error {
-	ch := c.channelSnapshot()
-	if ch == nil {
+	if c == nil || !c.enabled {
 		return nil
 	}
+	ch, err := c.topologyChannel()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ch.Close() }()
+	return declareExchange(ch, opts)
+}
+
+func declareExchange(ch *amqp.Channel, opts ExchangeOptions) error {
 	if opts.Type == "" {
 		opts.Type = "direct"
 	}
@@ -208,27 +214,15 @@ func (c *Client) DeclareExchange(opts ExchangeOptions) error {
 }
 
 func (c *Client) DeclareQueue(name string, opts QueueOptions, exchange string, routingKey string) error {
-	ch := c.channelSnapshot()
-	if ch == nil {
+	if c == nil || !c.enabled {
 		return nil
 	}
-	args := amqp.Table{}
-	if opts.DeadLetterExchange != "" {
-		args["x-dead-letter-exchange"] = opts.DeadLetterExchange
+	ch, err := c.topologyChannel()
+	if err != nil {
+		return err
 	}
-	if opts.DeadLetterRoutingKey != "" {
-		args["x-dead-letter-routing-key"] = opts.DeadLetterRoutingKey
-	}
-	if opts.MessageTTL > 0 {
-		args["x-message-ttl"] = int64(opts.MessageTTL / time.Millisecond)
-	}
-	if opts.Expires > 0 {
-		args["x-expires"] = int64(opts.Expires / time.Millisecond)
-	}
-	if len(args) == 0 {
-		args = nil
-	}
-	if _, err := ch.QueueDeclare(name, true, false, false, false, args); err != nil {
+	defer func() { _ = ch.Close() }()
+	if err := declareQueue(ch, name, opts); err != nil {
 		return err
 	}
 	return ch.QueueBind(name, routingKey, exchange, false, nil)
@@ -345,21 +339,22 @@ func (c *Client) DeclareTopology(topology Topology) error {
 	if c == nil || !c.Enabled() {
 		return nil
 	}
+	ch, err := c.topologyChannel()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ch.Close() }()
 	for _, exchange := range topology.Exchanges {
-		if err := c.DeclareExchange(exchange); err != nil {
+		if err := declareExchange(ch, exchange); err != nil {
 			return err
 		}
 	}
 	for _, queue := range topology.Queues {
-		if err := c.declareQueueOnly(queue.Name, queue.Options); err != nil {
+		if err := declareQueue(ch, queue.Name, queue.Options); err != nil {
 			return err
 		}
 	}
 	for _, binding := range topology.Bindings {
-		ch := c.channelSnapshot()
-		if ch == nil {
-			return nil
-		}
 		if err := ch.QueueBind(binding.Queue, binding.RoutingKey, binding.Exchange, false, nil); err != nil {
 			return err
 		}
@@ -389,10 +384,11 @@ func ConsumeJSONWithDecoder[T any](ctx context.Context, client *Client, queue st
 	if handler == nil {
 		return errors.New("rabbitmq JSON consumer handler is required")
 	}
-	ch := client.channelSnapshot()
-	if ch == nil {
-		return nil
+	ch, err := client.consumerChannel()
+	if err != nil {
+		return err
 	}
+	defer closeConsumerChannel(ch)
 	deliveries, err := ch.ConsumeWithContext(ctx, queue, consumer, false, false, false, false, nil)
 	if err != nil {
 		return err
@@ -456,6 +452,16 @@ func ConsumeJSONWithDecoder[T any](ctx context.Context, client *Client, queue st
 			_ = delivery.Ack(false)
 		}
 	}
+}
+
+// closeConsumerChannel never makes an application shutdown wait on an AMQP
+// channel-close RPC. The parent connection remains the authoritative bounded
+// shutdown boundary and will requeue any delivery that was not acknowledged.
+func closeConsumerChannel(ch *amqp.Channel) {
+	if ch == nil {
+		return
+	}
+	go func() { _ = ch.Close() }()
 }
 
 // DeliverySettled is returned only after a handler has explicitly ACKed or
@@ -527,11 +533,7 @@ func consumeRetryDisposition(err error) (bool, time.Duration) {
 	return true, delay
 }
 
-func (c *Client) declareQueueOnly(name string, opts QueueOptions) error {
-	ch := c.channelSnapshot()
-	if ch == nil {
-		return nil
-	}
+func declareQueue(ch *amqp.Channel, name string, opts QueueOptions) error {
 	args := amqp.Table{}
 	if opts.DeadLetterExchange != "" {
 		args["x-dead-letter-exchange"] = opts.DeadLetterExchange
@@ -561,36 +563,37 @@ func (c *Client) connect() error {
 	if err != nil {
 		return err
 	}
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if cfg.Prefetch <= 0 {
-		cfg.Prefetch = 10
-	}
-	if err := ch.Qos(cfg.Prefetch, 0, false); err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return err
-	}
 	c.mu.Lock()
 	c.conn = conn
-	c.channel = ch
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *Client) channelSnapshot() *amqp.Channel {
-	if c == nil || !c.enabled {
-		return nil
+func (c *Client) topologyChannel() (*amqp.Channel, error) {
+	return c.openChannel("topology")
+}
+
+func (c *Client) consumerChannel() (*amqp.Channel, error) {
+	ch, err := c.openChannel("consumer")
+	if err != nil {
+		return nil, err
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.channel
+	prefetch := c.cfg.Prefetch
+	if prefetch <= 0 {
+		prefetch = 10
+	}
+	if err := ch.Qos(prefetch, 0, false); err != nil {
+		_ = ch.Close()
+		return nil, fmt.Errorf("configure dedicated rabbitmq consumer channel: %w", err)
+	}
+	return ch, nil
 }
 
 func (c *Client) publisherChannel() (*amqp.Channel, error) {
+	return c.openChannel("publisher")
+}
+
+func (c *Client) openChannel(purpose string) (*amqp.Channel, error) {
 	if c == nil || !c.enabled {
 		return nil, fmt.Errorf("%w: disabled", ErrPublisherUnavailable)
 	}
@@ -605,7 +608,7 @@ func (c *Client) publisherChannel() (*amqp.Channel, error) {
 		if conn.IsClosed() {
 			return nil, fmt.Errorf("%w: connection closed while opening publisher channel", ErrPublisherUnavailable)
 		}
-		return nil, fmt.Errorf("open dedicated rabbitmq publisher channel: %w", err)
+		return nil, fmt.Errorf("open dedicated rabbitmq %s channel: %w", purpose, err)
 	}
 	return ch, nil
 }

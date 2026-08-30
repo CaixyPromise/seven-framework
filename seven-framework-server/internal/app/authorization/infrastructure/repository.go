@@ -760,7 +760,7 @@ FOR UPDATE`), domain.AuthorizationRootSystemKey)
 	}
 
 	var userCount int
-	if err := sqlx.GetContext(ctx, exec, &userCount, `SELECT COUNT(1) FROM sys_user WHERE isDeleted = 0`); err != nil {
+	if err := sqlx.GetContext(ctx, exec, &userCount, r.rebind(exec, `SELECT COUNT(1) FROM sys_user WHERE isDeleted = 0`)); err != nil {
 		return nil, fmt.Errorf("count users before authorization root bootstrap: %w", err)
 	}
 	if userCount > 0 {

@@ -49,6 +49,14 @@ func TestLiveNotificationRabbitMQConfirmReconnectAndBoundedConsumer(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	firstReceived, firstCancel, firstDone, firstMaxActive := startG43Consumer(adapter, "g43-live-consumer-first")
+	// A second process starts by declaring the same durable topology while the
+	// first process may already have an active consumer. Repeating that sequence
+	// must not share the consumer channel or corrupt its AMQP command stream.
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := adapter.Declare(); err != nil {
+			t.Fatalf("idempotent topology declaration with active consumer attempt %d: %v", attempt+1, err)
+		}
+	}
 	for index := 0; index < 4; index++ {
 		message := domain.DeliveryMessage{
 			MessageID:  fmt.Sprintf("g43-live-before-reconnect-%d", index),

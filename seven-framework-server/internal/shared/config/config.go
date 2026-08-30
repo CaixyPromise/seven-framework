@@ -105,13 +105,14 @@ const (
 )
 
 type DatasourceBootstrapConfig struct {
-	Enabled         bool                    `mapstructure:"enabled"`
-	Mode            DatasourceBootstrapMode `mapstructure:"mode"`
-	MigrationsDir   string                  `mapstructure:"migrationsDir"`
-	VersionTable    string                  `mapstructure:"versionTable"`
-	ChangeOwner     string                  `mapstructure:"changeOwner"`
-	BaselineVersion string                  `mapstructure:"baselineVersion"`
-	AllowLegacySync bool                    `mapstructure:"allowLegacySync"`
+	Enabled          bool                    `mapstructure:"enabled"`
+	Mode             DatasourceBootstrapMode `mapstructure:"mode"`
+	MigrationsDir    string                  `mapstructure:"migrationsDir"`
+	CleanBaselineDir string                  `mapstructure:"cleanBaselineDir"`
+	VersionTable     string                  `mapstructure:"versionTable"`
+	ChangeOwner      string                  `mapstructure:"changeOwner"`
+	BaselineVersion  string                  `mapstructure:"baselineVersion"`
+	AllowLegacySync  bool                    `mapstructure:"allowLegacySync"`
 }
 
 type MySQLConfig struct {
@@ -996,6 +997,7 @@ func setDefaults(loader *viper.Viper) {
 	loader.SetDefault("datasource.bootstrap.enabled", false)
 	loader.SetDefault("datasource.bootstrap.mode", string(BootstrapModeManual))
 	loader.SetDefault("datasource.bootstrap.migrationsDir", "")
+	loader.SetDefault("datasource.bootstrap.cleanBaselineDir", "")
 	loader.SetDefault("datasource.bootstrap.versionTable", "goose_db_version")
 	loader.SetDefault("datasource.bootstrap.changeOwner", "goose")
 	loader.SetDefault("datasource.bootstrap.baselineVersion", "")
@@ -1507,6 +1509,7 @@ func normalize(cfg *Config) {
 		cfg.Datasource.Bootstrap.Mode = BootstrapModeManual
 	}
 	cfg.Datasource.Bootstrap.MigrationsDir = strings.TrimSpace(cfg.Datasource.Bootstrap.MigrationsDir)
+	cfg.Datasource.Bootstrap.CleanBaselineDir = strings.TrimSpace(cfg.Datasource.Bootstrap.CleanBaselineDir)
 	cfg.Datasource.Bootstrap.VersionTable = strings.TrimSpace(cfg.Datasource.Bootstrap.VersionTable)
 	if cfg.Datasource.Bootstrap.VersionTable == "" {
 		cfg.Datasource.Bootstrap.VersionTable = "goose_db_version"

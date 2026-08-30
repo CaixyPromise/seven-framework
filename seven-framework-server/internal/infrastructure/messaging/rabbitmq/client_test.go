@@ -113,6 +113,30 @@ func TestGenericRabbitClientKeepsStandardJSONWireContract(t *testing.T) {
 	}
 }
 
+func TestRabbitClientDoesNotShareTopologyAndConsumerChannels(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve RabbitMQ client test source")
+	}
+	payload, err := os.ReadFile(filepath.Join(filepath.Dir(file), "client.go"))
+	if err != nil {
+		t.Fatalf("read RabbitMQ client source: %v", err)
+	}
+	source := string(payload)
+	if strings.Contains(source, "channelSnapshot()") {
+		t.Fatal("topology and consumers must not share a client-wide AMQP channel")
+	}
+	for _, want := range []string{
+		"func (c *Client) topologyChannel()",
+		"func (c *Client) consumerChannel()",
+		"defer closeConsumerChannel(ch)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("RabbitMQ channel ownership contract missing %q", want)
+		}
+	}
+}
+
 func TestGenericRabbitPayloadUsesStandardJSONSemantics(t *testing.T) {
 	type ordinaryPayload struct {
 		ID    int64  `json:"id"`

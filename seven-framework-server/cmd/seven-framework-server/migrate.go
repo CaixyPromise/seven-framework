@@ -71,6 +71,9 @@ func runMigrate(
 	}
 	bootstrapCfg := cfg.Datasource.Bootstrap
 	bootstrapCfg.MigrationsDir = dialectDir
+	if cfg.Datasource.Driver == "postgres" {
+		bootstrapCfg.CleanBaselineDir = filepath.Join(paths.migrationsRoot, "postgres-baseline")
+	}
 	if flagProvided(flags, "table") {
 		bootstrapCfg.VersionTable = *tableName
 	}

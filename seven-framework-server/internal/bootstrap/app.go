@@ -71,6 +71,9 @@ func NewWithOptions(options Options) (*App, error) {
 	}
 	if migrationsRoot := strings.TrimSpace(options.MigrationsRoot); migrationsRoot != "" {
 		cfg.Datasource.Bootstrap.MigrationsDir = filepath.Join(migrationsRoot, cfg.Datasource.Driver)
+		if cfg.Datasource.Driver == "postgres" {
+			cfg.Datasource.Bootstrap.CleanBaselineDir = filepath.Join(migrationsRoot, "postgres-baseline")
+		}
 	}
 
 	log, err := logger.New(cfg.Logging, cfg.Profile)

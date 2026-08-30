@@ -15,21 +15,20 @@ import (
 	"go.uber.org/zap"
 )
 
-type mysqlInspector interface {
+type schemaInspector interface {
 	Inspect(ctx context.Context, db *sql.DB, versionTable string) (Inspection, error)
 }
 
 type Service struct {
 	log       *zap.Logger
 	runner    Runner
-	inspector mysqlInspector
+	inspector schemaInspector
 }
 
 func NewService(log *zap.Logger) *Service {
 	return &Service{
-		log:       log,
-		runner:    NewGooseRunner(),
-		inspector: newMySQLInspector(),
+		log:    log,
+		runner: NewGooseRunner(),
 	}
 }
 
@@ -44,14 +43,15 @@ func (s *Service) Inspect(ctx context.Context, provider store.Provider, cfg conf
 	if err != nil {
 		return Inspection{}, err
 	}
-	if provider.Driver() != "mysql" {
-		return Inspection{}, fmt.Errorf("datasource bootstrap inspect does not support driver: %s", provider.Driver())
-	}
 	cfg, err = normalizedBootstrapConfig(provider.Driver(), cfg)
 	if err != nil {
 		return Inspection{}, err
 	}
-	inspection, err := s.inspector.Inspect(ctx, db, cfg.VersionTable)
+	inspector, err := s.inspectorFor(provider.Driver())
+	if err != nil {
+		return Inspection{}, err
+	}
+	inspection, err := inspector.Inspect(ctx, db, cfg.VersionTable)
 	if err != nil {
 		s.logError("datasource_bootstrap_failed", err, provider.Driver(), cfg, Inspection{})
 		return Inspection{}, err
@@ -68,17 +68,17 @@ func (s *Service) Bootstrap(ctx context.Context, provider store.Provider, cfg co
 	if err != nil {
 		return Result{}, err
 	}
-	if provider.Driver() != "mysql" {
-		return Result{}, fmt.Errorf("datasource bootstrap does not support driver: %s", provider.Driver())
-	}
-
 	cfg, err = normalizedBootstrapConfig(provider.Driver(), cfg)
 	if err != nil {
 		return Result{}, err
 	}
 	s.logInfo("datasource_bootstrap_started", provider.Driver(), cfg, Inspection{})
 
-	inspection, err := s.inspector.Inspect(ctx, db, cfg.VersionTable)
+	inspector, err := s.inspectorFor(provider.Driver())
+	if err != nil {
+		return Result{}, err
+	}
+	inspection, err := inspector.Inspect(ctx, db, cfg.VersionTable)
 	if err != nil {
 		s.logError("datasource_bootstrap_failed", err, provider.Driver(), cfg, Inspection{})
 		return Result{}, err
@@ -91,6 +91,24 @@ func (s *Service) Bootstrap(ctx context.Context, provider store.Provider, cfg co
 	result := Result{Inspection: inspection}
 	switch inspection.State {
 	case SchemaStateEmpty:
+		if provider.Driver() == "postgres" {
+			if strings.TrimSpace(cfg.CleanBaselineDir) == "" {
+				return Result{}, errors.New("datasource.bootstrap.cleanBaselineDir must be configured for PostgreSQL empty-schema bootstrap")
+			}
+			if _, err := s.runner.Up(ctx, db, provider.Dialect(), cfg.CleanBaselineDir, cfg.VersionTable); err != nil {
+				s.logError("datasource_bootstrap_failed", fmt.Errorf("run PostgreSQL clean baseline: %w", err), provider.Driver(), cfg, inspection)
+				return Result{}, fmt.Errorf("run PostgreSQL clean baseline: %w", err)
+			}
+			result.BaselineApplied = true
+			result.UpdateApplied = true
+			finalVersion, err := s.runner.Up(ctx, db, provider.Dialect(), cfg.MigrationsDir, cfg.VersionTable)
+			if err != nil {
+				s.logError("datasource_bootstrap_failed", fmt.Errorf("run update after PostgreSQL baseline: %w", err), provider.Driver(), cfg, inspection)
+				return Result{}, fmt.Errorf("run update after PostgreSQL baseline: %w", err)
+			}
+			result.FinalVersion = finalVersion
+			break
+		}
 		baselineVersion, err := parseBaselineVersion(cfg)
 		if err != nil {
 			s.logError("datasource_bootstrap_failed", err, provider.Driver(), cfg, inspection)
@@ -166,6 +184,20 @@ func (s *Service) Bootstrap(ctx context.Context, provider store.Provider, cfg co
 	return result, nil
 }
 
+func (s *Service) inspectorFor(driver string) (schemaInspector, error) {
+	if s != nil && s.inspector != nil {
+		return s.inspector, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case "mysql":
+		return newMySQLInspector(), nil
+	case "postgres":
+		return newPostgresInspector(), nil
+	default:
+		return nil, fmt.Errorf("datasource bootstrap does not support driver: %s", driver)
+	}
+}
+
 func ensureProvider(provider store.Provider) (*sql.DB, error) {
 	if provider == nil || !provider.Configured() || provider.DB() == nil {
 		return nil, errors.New("datasource provider is not configured")
@@ -176,6 +208,9 @@ func ensureProvider(provider store.Provider) (*sql.DB, error) {
 func normalizedBootstrapConfig(driver string, cfg config.DatasourceBootstrapConfig) (config.DatasourceBootstrapConfig, error) {
 	if strings.TrimSpace(cfg.MigrationsDir) == "" {
 		cfg.MigrationsDir = filepath.Join("migrations", driver)
+	}
+	if driver == "postgres" && strings.TrimSpace(cfg.CleanBaselineDir) == "" {
+		cfg.CleanBaselineDir = filepath.Join("migrations", "postgres-baseline")
 	}
 	if strings.TrimSpace(cfg.VersionTable) == "" {
 		cfg.VersionTable = goose.DefaultTablename

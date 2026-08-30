@@ -7,6 +7,7 @@ const policySource = await readFile(
   new URL('../src/lib/navigation/runtimeFeaturePolicy.ts', import.meta.url),
   'utf8',
 );
+const appSource = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const { outputText, diagnostics = [] } = ts.transpileModule(policySource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -25,6 +26,12 @@ const {
   isRuntimeFeatureEnabled,
   normalizeRuntimeFeatures,
 } = policy;
+
+test('App waits for runtime features before creating its only router', () => {
+  assert.doesNotMatch(appSource, /createPublicRuntimeRouter/);
+  assert.match(appSource, /features\s*\?\s*createRuntimeRouter\(features\)\s*:\s*null/);
+  assert.match(appSource, /if\s*\(!router\)/);
+});
 
 test('uses features.enabled as the authoritative capability source', () => {
   const normalized = normalizeRuntimeFeatures({

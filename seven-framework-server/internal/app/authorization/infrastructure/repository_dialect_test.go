@@ -1,6 +1,8 @@
 package infrastructure
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,25 @@ func TestAuthorizationPostgresRendererCoversAcceptanceFixture(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fixture query missing quoted identifier %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAuthorizationPostgresRendererCoversInitialOwnerUserCount(t *testing.T) {
+	query := `SELECT COUNT(1) FROM sys_user WHERE isDeleted = 0`
+	got := authorizationPostgresRenderer.RenderPostgres(query)
+	if !strings.Contains(got, `WHERE "isDeleted" = FALSE`) {
+		t.Fatalf("initial owner user count is not PostgreSQL-safe:\n%s", got)
+	}
+}
+
+func TestAuthorizationRootBootstrapRoutesUserCountThroughDialectRenderer(t *testing.T) {
+	source, err := os.ReadFile("repository.go")
+	if err != nil {
+		t.Fatalf("read authorization repository: %v", err)
+	}
+	query := regexp.MustCompile(`sqlx\.GetContext\(ctx, exec, &userCount, r\.rebind\(exec,\s*` + "`" + `SELECT COUNT\(1\) FROM sys_user WHERE isDeleted = 0` + "`" + `\)\)`)
+	if !query.Match(source) {
+		t.Fatal("authorization root user count must pass through the repository dialect renderer")
 	}
 }
 
