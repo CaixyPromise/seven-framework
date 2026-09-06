@@ -179,6 +179,12 @@ export function useMfaChallengeFlow(options?: UseMfaChallengeFlowOptions) {
         applyChallengePayload(data, activeFlowNonce);
       }
       return data;
+    } catch (error) {
+      const payloadCode = (error as { payload?: { code?: number } })?.payload?.code;
+      if (payloadCode === 40400) {
+        throw new Error('验证会话已失效，请关闭验证窗口后重新提交操作');
+      }
+      throw new Error(readErrorMessage(error, '验证码发送失败，请稍后重试'));
     } finally {
       setBusy(false);
     }

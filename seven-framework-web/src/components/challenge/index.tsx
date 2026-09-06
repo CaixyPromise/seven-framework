@@ -50,6 +50,9 @@ export default function GlobalChallengeModal({
   const hints = step?.userInterfaceHints ?? {};
   const latestResult = challengeFlow.lastResponse;
   const recommendedStepIdentifier = challengeFlow.challenge?.recommendedStepIdentifier;
+  const resendCooldownSeconds =
+    typeof hints.resendCooldownSeconds === 'number' ? hints.resendCooldownSeconds : 0;
+  const [verificationCountdown, setVerificationCountdown] = useState(0);
 
   const hasMultipleSteps = availableSteps.length > 1;
   const isActive = challengeFlow.isActive;
@@ -69,6 +72,22 @@ export default function GlobalChallengeModal({
     }
     // 自动激活：单步场景或已确定步骤时，若是 Passkey 断言则立刻触发
   }, [form, hasMultipleSteps, isActive, step?.stepIdentifier, type]);
+
+  useEffect(() => {
+    const seconds = latestResult?.cooldownSeconds ?? step?.cooldownSeconds ?? 0;
+    setVerificationCountdown(seconds > 0 ? seconds : 0);
+    if (seconds <= 0) return;
+    const timer = window.setInterval(() => {
+      setVerificationCountdown((current) => {
+        if (current <= 1) {
+          window.clearInterval(timer);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [latestResult?.cooldownSeconds, step?.cooldownSeconds, step?.stepIdentifier]);
 
   // 选择器：用户点击某个方式
   const handleSelectStep = (stepIdentifier: string) => {
@@ -174,6 +193,7 @@ export default function GlobalChallengeModal({
       case 'EMAIL_ONE_TIME_PASSWORD':
         return (
           <OtpForm
+            key={step?.stepIdentifier}
             mode="email"
             targetEmail={
               typeof hints.emailMasked === 'string'
@@ -183,9 +203,17 @@ export default function GlobalChallengeModal({
                   : undefined
             }
             busy={challengeFlow.busy}
-            cooldownSeconds={typeof cooldownSeconds === 'number' ? cooldownSeconds : undefined}
+            cooldownSeconds={resendCooldownSeconds}
             onSendCode={async () => {
-              await challengeFlow.refreshCurrentStep();
+              setError(undefined);
+              try {
+                await challengeFlow.refreshCurrentStep();
+                form.setFieldValue('oneTimePassword', undefined);
+              } catch (err) {
+                const message = (err as Error)?.message || '验证码发送失败，请稍后重试';
+                setError(message);
+                throw err;
+              }
             }}
           />
         );
@@ -238,6 +266,7 @@ export default function GlobalChallengeModal({
           key="confirm"
           type="primary"
           loading={challengeFlow.busy}
+          disabled={challengeFlow.busy || verificationCountdown > 0}
           onClick={handleSubmit}
           style={{
             background: 'linear-gradient(90deg, #3b82f6 0%, #22d3ee 100%)',
@@ -246,7 +275,11 @@ export default function GlobalChallengeModal({
             fontWeight: 600,
           }}
         >
-          {type === 'WEBAUTHN_PASSKEY_ASSERTION' ? '调起验证' : '确认验证'}
+          {verificationCountdown > 0
+            ? `${verificationCountdown} 秒后可重试`
+            : type === 'WEBAUTHN_PASSKEY_ASSERTION'
+              ? '调起验证'
+              : '确认验证'}
         </Button>,
       ].filter(Boolean);
 

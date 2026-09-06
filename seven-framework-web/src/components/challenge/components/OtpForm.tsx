@@ -18,8 +18,6 @@ interface OtpFormProps {
   cooldownSeconds?: number;
 }
 
-const COOLDOWN_DURATION = 60;
-
 export function OtpForm({
   mode,
   targetEmail,
@@ -62,7 +60,11 @@ export function OtpForm({
     setSending(true);
     try {
       await onSendCode();
-      setCountdown(COOLDOWN_DURATION);
+    } catch {
+      // The parent challenge modal owns the actionable error message. Keep the
+      // resend action available instead of inventing a client-side cooldown.
+      // Successful sends receive their authoritative countdown through the
+      // resendCooldownSeconds hint.
     } finally {
       setSending(false);
     }
