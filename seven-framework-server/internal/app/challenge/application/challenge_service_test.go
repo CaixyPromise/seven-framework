@@ -319,7 +319,7 @@ func TestChallengeServiceThrottlesEmailOtpStartBeforeThirdSend(t *testing.T) {
 
 func TestChallengeServiceThrottlesEmailOtpRefreshBeforeThirdSend(t *testing.T) {
 	var sent int32
-	service, _ := newTestChallengeServiceWithStoreAndEmailSender(
+	service, repo := newTestChallengeServiceWithStoreAndEmailSender(
 		t,
 		config.ChallengeConfig{
 			SessionTTLSeconds:               300,
@@ -338,6 +338,12 @@ func TestChallengeServiceThrottlesEmailOtpRefreshBeforeThirdSend(t *testing.T) {
 
 	start := startPrivilegedEmailChallenge(t, service, "user:1001", "idem-email-refresh-1", "config:1|reveal")
 	step := firstStepOfType(t, start, challengedomain.ChallengeTypeEmailOneTimePassword)
+	initialStep := start.Steps[0]
+	if cooldown, ok := initialStep.UserInterfaceHints["resendCooldownSeconds"].(int); !ok || cooldown <= 0 {
+		t.Fatalf("initial email send must expose resend cooldown, got %+v", initialStep.UserInterfaceHints)
+	}
+	stored := repo.mustSession(t, start.ChallengeIdentifier)
+	stored.SessionContext[emailOTPTriggerContextKey(&stored.Steps[0])] = time.Now().UTC().Add(-2 * time.Second).Format(time.RFC3339Nano)
 	if _, err := service.Refresh(context.Background(), start.ChallengeIdentifier, challengefacade.RefreshChallengeRequest{
 		StepIdentifier: step.StepIdentifier,
 	}); err != nil {
@@ -350,6 +356,117 @@ func TestChallengeServiceThrottlesEmailOtpRefreshBeforeThirdSend(t *testing.T) {
 	assertChallengeThrottledError(t, err)
 	if got := atomic.LoadInt32(&sent); got != 2 {
 		t.Fatalf("expected throttled refresh to be blocked before send, sent=%d", got)
+	}
+}
+
+func TestChallengeServiceBlocksImmediateEmailOtpResendAndFreshCodeClearsVerificationCooldown(t *testing.T) {
+	var sent int32
+	service, repo := newTestChallengeServiceWithStoreAndEmailSender(
+		t,
+		config.ChallengeConfig{
+			SessionTTLSeconds:               300,
+			ProofTokenTTLMinSeconds:         60,
+			ProofTokenTTLMaxSeconds:         300,
+			EmailMaxAttempts:                5,
+			EmailCooldownSeconds:            60,
+			TriggerMaxAttempts:              5,
+			ThrottleWindowSeconds:           300,
+			ThrottleLockSeconds:             900,
+			WebAuthnChallengeTimeoutSeconds: 60,
+		},
+		&testCompletionStore{},
+		countingEmailSender{count: &sent},
+	)
+
+	start := startPrivilegedEmailChallenge(t, service, "user:1001", "idem-email-resend-cooldown", "config:1|reveal")
+	step := firstStepOfType(t, start, challengedomain.ChallengeTypeEmailOneTimePassword)
+	initialSession := repo.mustSession(t, start.ChallengeIdentifier)
+	initialCode, _ := initialSession.SessionContext["email.otp.code."+initialSession.Steps[0].StepIdentifier].(string)
+	if initialCode == "" {
+		t.Fatal("initial email code was not persisted")
+	}
+	if _, err := service.Refresh(context.Background(), start.ChallengeIdentifier, challengefacade.RefreshChallengeRequest{
+		StepIdentifier: step.StepIdentifier,
+	}); err == nil {
+		t.Fatal("immediate email resend must be rejected")
+	} else {
+		assertChallengeThrottledError(t, err)
+	}
+	if got := atomic.LoadInt32(&sent); got != 1 {
+		t.Fatalf("immediate resend created a duplicate email: sent=%d", got)
+	}
+
+	stored := repo.mustSession(t, start.ChallengeIdentifier)
+	storedStep := &stored.Steps[0]
+	storedStep.ActivateCooldown(time.Now().UTC())
+	stored.SessionContext[emailOTPTriggerContextKey(storedStep)] = time.Now().UTC().Add(-61 * time.Second).Format(time.RFC3339Nano)
+	refreshed, err := service.Refresh(context.Background(), start.ChallengeIdentifier, challengefacade.RefreshChallengeRequest{
+		StepIdentifier: step.StepIdentifier,
+	})
+	if err != nil {
+		t.Fatalf("email resend after cooldown failed: %v", err)
+	}
+	if refreshed.Steps[0].CooldownSeconds != 0 {
+		t.Fatalf("fresh email code retained old verification cooldown: %+v", refreshed.Steps[0])
+	}
+	if got := atomic.LoadInt32(&sent); got != 2 {
+		t.Fatalf("expected exactly one fresh email after cooldown: sent=%d", got)
+	}
+	refreshedSession := repo.mustSession(t, start.ChallengeIdentifier)
+	refreshedStep := &refreshedSession.Steps[0]
+	freshCode, _ := refreshedSession.SessionContext["email.otp.code."+refreshedStep.StepIdentifier].(string)
+	if freshCode == "" {
+		t.Fatal("fresh email code was not persisted for verification")
+	}
+	if freshCode == initialCode {
+		t.Fatal("email resend retained the previous code")
+	}
+	oldCodeAccepted, err := service.steps.VerifyStep(context.Background(), refreshedSession, refreshedStep, map[string]any{
+		"oneTimePassword": initialCode,
+	})
+	if err != nil {
+		t.Fatalf("verify superseded email code: %v", err)
+	}
+	if oldCodeAccepted {
+		t.Fatal("superseded email code remained valid after resend")
+	}
+	result, err := service.Respond(context.Background(), start.ChallengeIdentifier, challengefacade.RespondChallengeRequest{
+		StepIdentifier: refreshedStep.StepIdentifier,
+		Payload:        map[string]any{"oneTimePassword": freshCode},
+	})
+	if err != nil {
+		t.Fatalf("fresh email code was not immediately verifiable: %v", err)
+	}
+	if result.ChallengeState != string(challengedomain.ChallengeStatePassed) {
+		t.Fatalf("fresh email code did not pass challenge: %+v", result)
+	}
+}
+
+func TestChallengeServiceEmailOtpRefreshUsesSessionLock(t *testing.T) {
+	service, repo := newTestChallengeServiceWithStoreAndEmailSender(
+		t,
+		config.ChallengeConfig{
+			SessionTTLSeconds:       300,
+			EmailMaxAttempts:        5,
+			EmailCooldownSeconds:    1,
+			TriggerMaxAttempts:      5,
+			ThrottleWindowSeconds:   300,
+			ThrottleLockSeconds:     900,
+			ProofTokenTTLMinSeconds: 60,
+			ProofTokenTTLMaxSeconds: 300,
+		},
+		&testCompletionStore{},
+		countingEmailSender{},
+	)
+
+	start := startPrivilegedEmailChallenge(t, service, "user:1001", "idem-email-refresh-lock", "config:1|reveal")
+	step := firstStepOfType(t, start, challengedomain.ChallengeTypeEmailOneTimePassword)
+	repo.submitLocks[start.ChallengeIdentifier] = "concurrent-refresh"
+
+	if _, err := service.Refresh(context.Background(), start.ChallengeIdentifier, challengefacade.RefreshChallengeRequest{
+		StepIdentifier: step.StepIdentifier,
+	}); err == nil {
+		t.Fatal("refresh must reject a concurrent challenge operation")
 	}
 }
 
@@ -429,7 +546,9 @@ func TestChallengeServiceEmailOtpRefreshRestoresMissingEmailTargetBeforeThrottle
 
 	start := startPrivilegedEmailChallenge(t, service, "user:1001", "idem-email-missing-target", "config:1|reveal")
 	step := firstStepOfType(t, start, challengedomain.ChallengeTypeEmailOneTimePassword)
-	delete(repo.mustSession(t, start.ChallengeIdentifier).SessionContext, "email.target")
+	storedBeforeRefresh := repo.mustSession(t, start.ChallengeIdentifier)
+	delete(storedBeforeRefresh.SessionContext, "email.target")
+	storedBeforeRefresh.SessionContext[emailOTPTriggerContextKey(&storedBeforeRefresh.Steps[0])] = time.Now().UTC().Add(-2 * time.Second).Format(time.RFC3339Nano)
 
 	if _, err := service.Refresh(context.Background(), start.ChallengeIdentifier, challengefacade.RefreshChallengeRequest{
 		StepIdentifier: step.StepIdentifier,

@@ -1407,7 +1407,7 @@ func sceneBindingSelectBase(r *Repository) string {
 }
 
 func deliverySelectBase(r *Repository) string {
-	return `SELECT id, deliveryId, requestDigest, notificationId, externalTargetId, sceneSnapshotId, sceneCode, channelCode, channelType, templateCode, COALESCE(target, '') target, COALESCE(targetMasked, '') targetMasked, ` + r.jsonText("payloadJson") + ` payloadJson, COALESCE(renderedSubject, '') renderedSubject, COALESCE(renderedText, '') renderedText, COALESCE(renderedHtml, '') renderedHtml, COALESCE(renderedMarkdown, '') renderedMarkdown, COALESCE(contentTier, 'SENSITIVE') contentTier, status, retryCount, maxRetry, nextRetryAt, COALESCE(lastError, '') lastError, COALESCE(providerReference, '') providerReference, COALESCE(traceId, '') traceId, sentAt, creatorId, createTime, updateTime, isDeleted FROM sys_notification_delivery`
+	return `SELECT id, deliveryId, COALESCE(requestDigest, '') requestDigest, notificationId, externalTargetId, sceneSnapshotId, sceneCode, channelCode, channelType, templateCode, COALESCE(target, '') target, COALESCE(targetMasked, '') targetMasked, ` + r.jsonText("payloadJson") + ` payloadJson, COALESCE(renderedSubject, '') renderedSubject, COALESCE(renderedText, '') renderedText, COALESCE(renderedHtml, '') renderedHtml, COALESCE(renderedMarkdown, '') renderedMarkdown, COALESCE(contentTier, 'SENSITIVE') contentTier, status, retryCount, maxRetry, nextRetryAt, COALESCE(lastError, '') lastError, COALESCE(providerReference, '') providerReference, COALESCE(traceId, '') traceId, sentAt, creatorId, createTime, updateTime, isDeleted FROM sys_notification_delivery`
 }
 
 func selectPage[T any](ctx context.Context, db *sqlx.DB, base string, where []string, order string, current, pageSize int, args ...any) ([]T, int64, error) {

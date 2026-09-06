@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	challengedomain "github.com/CaixyPromise/seven-framework/seven-framework-server/internal/app/challenge/domain"
 	challengefacade "github.com/CaixyPromise/seven-framework/seven-framework-server/internal/app/challenge/facade"
@@ -50,7 +51,7 @@ func TestChallengeHTTPRoutesThrottleStartAndEmailSendBeforeThirdTrigger(t *testi
 
 func TestChallengeHTTPRoutesThrottleRefreshBeforeThirdEmailSend(t *testing.T) {
 	var sent int32
-	service, _ := newTestChallengeServiceWithStoreAndEmailSender(
+	service, repo := newTestChallengeServiceWithStoreAndEmailSender(
 		t,
 		config.ChallengeConfig{
 			SessionTTLSeconds:               300,
@@ -71,6 +72,8 @@ func TestChallengeHTTPRoutesThrottleRefreshBeforeThirdEmailSend(t *testing.T) {
 	start := postJSON(t, engine, "/internal/challenges/start", privilegedEmailStartRequest("user:1001", "idem-http-refresh-1", "config:1|reveal"), 0)
 	challengeID := dataString(t, start, "challengeIdentifier")
 	stepID := firstRouteStepOfType(t, start, challengedomain.ChallengeTypeEmailOneTimePassword)
+	stored := repo.mustSession(t, challengeID)
+	stored.SessionContext[emailOTPTriggerContextKey(&stored.Steps[0])] = time.Now().UTC().Add(-2 * time.Second).Format(time.RFC3339Nano)
 	postJSON(t, engine, "/v1/challenges/"+challengeID+"/refresh", challengefacade.RefreshChallengeRequest{StepIdentifier: stepID}, 0)
 	result := postJSON(t, engine, "/v1/challenges/"+challengeID+"/refresh", challengefacade.RefreshChallengeRequest{StepIdentifier: stepID}, apperrors.CodeRateLimited)
 

@@ -104,14 +104,22 @@ func (d *MockDriver) Send(ctx context.Context, message domain.DriverMessage) err
 type SMTPDriver struct{}
 
 type smtpConfig struct {
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Username   string `json:"username"`
-	From       string `json:"from"`
-	UseTLS     bool   `json:"useTls"`
-	StartTLS   bool   `json:"startTls"`
-	Timeout    string `json:"timeout"`
-	SkipVerify bool   `json:"skipVerify"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Username      string `json:"username"`
+	From          string `json:"from"`
+	UseTLS        bool   `json:"useTls"`
+	StartTLS      bool   `json:"startTls"`
+	Timeout       string `json:"timeout"`
+	SkipVerify    bool   `json:"skipVerify"`
+	TLSServerName string `json:"tlsServerName"`
+}
+
+func resolveSMTPServerName(cfg smtpConfig, host string) string {
+	if value := strings.TrimSpace(cfg.TLSServerName); value != "" {
+		return value
+	}
+	return strings.TrimSpace(host)
 }
 
 func (SMTPDriver) Send(ctx context.Context, message domain.DriverMessage) error {
@@ -125,6 +133,9 @@ func (SMTPDriver) Send(ctx context.Context, message domain.DriverMessage) error 
 	if cfg.Port <= 0 {
 		cfg.Port = 25
 	}
+	if cfg.UseTLS && cfg.StartTLS {
+		return fmt.Errorf("smtp useTls and startTls must not both be enabled")
+	}
 	timeout := 10 * time.Second
 	if strings.TrimSpace(cfg.Timeout) != "" {
 		if parsed, err := time.ParseDuration(cfg.Timeout); err == nil && parsed > 0 {
@@ -132,6 +143,7 @@ func (SMTPDriver) Send(ctx context.Context, message domain.DriverMessage) error 
 		}
 	}
 	host := strings.TrimSpace(cfg.Host)
+	serverName := resolveSMTPServerName(cfg, host)
 	addr := fmt.Sprintf("%s:%d", host, cfg.Port)
 	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
@@ -141,27 +153,28 @@ func (SMTPDriver) Send(ctx context.Context, message domain.DriverMessage) error 
 	defer conn.Close()
 	var client *smtp.Client
 	if cfg.UseTLS {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: host, InsecureSkipVerify: cfg.SkipVerify}) //nolint:gosec
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName, InsecureSkipVerify: cfg.SkipVerify}) //nolint:gosec
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			return err
 		}
-		client, err = smtp.NewClient(tlsConn, host)
+		client, err = smtp.NewClient(tlsConn, serverName)
 	} else {
-		client, err = smtp.NewClient(conn, host)
+		client, err = smtp.NewClient(conn, serverName)
 	}
 	if err != nil {
 		return err
 	}
 	defer client.Quit()
 	if cfg.StartTLS {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err := client.StartTLS(&tls.Config{ServerName: host, InsecureSkipVerify: cfg.SkipVerify}); err != nil { //nolint:gosec
-				return err
-			}
+		if ok, _ := client.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("smtp server does not support required STARTTLS")
+		}
+		if err := client.StartTLS(&tls.Config{ServerName: serverName, InsecureSkipVerify: cfg.SkipVerify}); err != nil { //nolint:gosec
+			return err
 		}
 	}
 	if strings.TrimSpace(cfg.Username) != "" {
-		if err := client.Auth(smtp.PlainAuth("", cfg.Username, message.SecretPlain, host)); err != nil {
+		if err := client.Auth(smtp.PlainAuth("", cfg.Username, message.SecretPlain, serverName)); err != nil {
 			return err
 		}
 	}

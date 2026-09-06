@@ -266,6 +266,17 @@ func (s *ChallengeService) Respond(ctx context.Context, challengeIdentifier stri
 }
 
 func (s *ChallengeService) Refresh(ctx context.Context, challengeIdentifier string, request facade.RefreshChallengeRequest) (*facade.StartChallengeResponse, error) {
+	lockToken, locked, err := s.sessions.AcquireSubmitLock(ctx, challengeIdentifier, 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, apperrors.Operation("挑战正在处理中，请勿重复提交")
+	}
+	defer func() {
+		_ = s.sessions.ReleaseSubmitLock(ctx, challengeIdentifier, lockToken)
+	}()
+
 	session, err := s.getSession(ctx, challengeIdentifier)
 	if err != nil {
 		return nil, err
@@ -289,12 +300,22 @@ func (s *ChallengeService) Refresh(ctx context.Context, challengeIdentifier stri
 	if err := s.ensureRefreshThrottleContext(ctx, session, step); err != nil {
 		return nil, err
 	}
+	if cooldown := emailOTPResendCooldownSeconds(session, step, now); cooldown > 0 {
+		return nil, apperrors.ChallengeThrottled("验证码已发送，请稍后再获取").WithDetails(map[string]any{
+			"cooldownSeconds": cooldown,
+			"dimension":       "email-otp-resend",
+		})
+	}
 	if err := s.ensureStepTriggerAllowed(ctx, session, step); err != nil {
 		return nil, err
 	}
 	if err := s.steps.RefreshStep(ctx, session, step); err != nil {
 		return nil, err
 	}
+	// A newly issued code must be immediately verifiable. A previous invalid
+	// submission may have put the step into verification cooldown; retaining
+	// that cooldown after replacing the code makes the fresh code unusable.
+	step.ClearCooldown()
 	if err := s.recordStepTrigger(ctx, session, step); err != nil {
 		return nil, err
 	}
@@ -644,6 +665,9 @@ func (s *ChallengeService) ensureStepTriggerAllowed(ctx context.Context, session
 }
 
 func (s *ChallengeService) recordStepTrigger(ctx context.Context, session *domain.ChallengeSession, step *domain.ChallengeStep) error {
+	if session != nil && step != nil && step.ChallengeType == domain.ChallengeTypeEmailOneTimePassword {
+		session.EnsureSessionContext()[emailOTPTriggerContextKey(step)] = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	if s == nil || s.config.TriggerMaxAttempts <= 0 {
 		return nil
 	}
@@ -799,6 +823,10 @@ func toStartChallengeResponse(session *domain.ChallengeSession, now time.Time) f
 	challengeTypes := make([]string, 0, len(session.Steps))
 	for i := range session.Steps {
 		step := &session.Steps[i]
+		hints := cloneStringAnyMap(step.UserInterfaceHints)
+		if cooldown := emailOTPResendCooldownSeconds(session, step, now); cooldown > 0 {
+			hints["resendCooldownSeconds"] = cooldown
+		}
 		steps = append(steps, facade.ChallengeStepVO{
 			StepIdentifier:        step.StepIdentifier,
 			ChallengeType:         string(step.ChallengeType),
@@ -807,7 +835,7 @@ func toStartChallengeResponse(session *domain.ChallengeSession, now time.Time) f
 			RemainingAttemptCount: step.RemainingAttemptCount(),
 			CooldownSeconds:       step.RemainingCooldownSeconds(now),
 			Switchable:            session.IsSwitchable(step),
-			UserInterfaceHints:    step.UserInterfaceHints,
+			UserInterfaceHints:    hints,
 		})
 		challengeTypes = appendIfMissing(challengeTypes, string(step.ChallengeType))
 	}
@@ -822,6 +850,41 @@ func toStartChallengeResponse(session *domain.ChallengeSession, now time.Time) f
 		RecommendedStepIdentifier:  session.RecommendedStepIdentifier,
 		ActualChallengeTypeNames:   challengeTypes,
 	}
+}
+
+func emailOTPTriggerContextKey(step *domain.ChallengeStep) string {
+	if step == nil {
+		return ""
+	}
+	return "email.otp.lastTriggeredAt." + strings.TrimSpace(step.StepIdentifier)
+}
+
+func emailOTPResendCooldownSeconds(session *domain.ChallengeSession, step *domain.ChallengeStep, now time.Time) int {
+	if session == nil || step == nil || step.ChallengeType != domain.ChallengeTypeEmailOneTimePassword || step.CooldownSeconds <= 0 {
+		return 0
+	}
+	raw := strings.TrimSpace(stringValue(session.EnsureSessionContext()[emailOTPTriggerContextKey(step)]))
+	triggeredAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return 0
+	}
+	remaining := triggeredAt.Add(time.Duration(step.CooldownSeconds) * time.Second).Sub(now.UTC())
+	if remaining <= 0 {
+		return 0
+	}
+	seconds := int(remaining.Seconds())
+	if seconds <= 0 {
+		return 1
+	}
+	return seconds
+}
+
+func cloneStringAnyMap(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source)+1)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func appendIfMissing(items []string, value string) []string {
